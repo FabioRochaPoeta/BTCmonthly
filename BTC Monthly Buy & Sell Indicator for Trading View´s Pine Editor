@@ -1,0 +1,136 @@
+//@version=6
+// -----------------------------------------------------------------------------
+// WARNING: This indicator is designed for the MONTHLY timeframe only.
+// It will not function correctly on any other timeframe.
+// -----------------------------------------------------------------------------
+// Creator: Fabio Rocha
+// Website: https://www.linkedin.com/in/farocha/?locale=en_US
+// -----------------------------------------------------------------------------
+indicator("BTC Monthly Buy & Sell Points", shorttitle="BTC MONTHLY", overlay=true, max_labels_count=500)
+
+// =============================================================================
+// I N P U T S
+// =============================================================================
+// Moving Averages
+wma_len      = input.int(14, "WMA Length (Fast)", minval=1)
+ema_week_len = input.int(200, "EMA Length (Slow, Weekly)", minval=1)
+htf          = input.timeframe("W", "Higher Timeframe for EMA")
+
+// Signal & Display Settings
+show_signals = input.bool(true, "Show BUY/SELL Labels")
+label_max    = input.int(50, "Max Labels per Type", minval=10, maxval=500, tooltip="Limits the number of visible labels to avoid visual clutter.")
+show_info_table = input.bool(true, "Show Info Table", tooltip="Displays a table with summary information in the top right corner.")
+
+// Colors
+color_wma = input.color(color.red, "WMA Color")
+color_ema = input.color(color.purple, "EMA Color")
+color_bar_bull = input.color(color.new(color.green, 0), "Bar Color (Bullish)")
+color_bar_neut = input.color(color.new(color.rgb(122,63,191), 0), "Bar Color (Neutral)") // Color of the neutral candle (purple)
+color_bar_bear = input.color(color.new(color.red, 0), "Bar Color (Bearish)") // Color of the bearish candle (red)
+
+// =============================================================================
+// M O V I N G   A V E R A G E S
+// =============================================================================
+wma_val = ta.wma(close, wma_len)
+ema_htf = request.security(syminfo.tickerid, htf, ta.ema(close, ema_week_len), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// =============================================================================
+// P L O T S
+// =============================================================================
+plot(wma_val, "WMA", color=color_wma, linewidth=2)
+plot(ema_htf, "EMA", color=color_ema, linewidth=2)
+
+// =============================================================================
+// S I G N A L S   L O G I C
+// =============================================================================
+
+// Buy Condition
+buy_condition_original = ta.crossunder(close, ema_htf)
+buy_condition_pavio_ema_recovery = ta.crossunder(low, ema_htf) and ta.crossover(close, ema_htf)
+buy_condition = buy_condition_original or buy_condition_pavio_ema_recovery
+
+// State logic for position control
+var bool in_position = false
+var label[] buys_labels  = array.new<label>()
+var label[] sells_labels = array.new<label>()
+
+// Condition for the candle to be "naturally purple"
+is_naturally_neutral = close < wma_val and close > ema_htf
+// Detects the transition from a non-purple to a purple state
+var bool was_neutral = false
+first_neutral_bar_in_sequence = is_naturally_neutral and not was_neutral
+if is_naturally_neutral
+    was_neutral := true
+else
+    was_neutral := false
+
+// Combined sell condition: crossover below the WMA AND on the first candle that would be purple
+sell_condition = ta.crossunder(close, wma_val) and first_neutral_bar_in_sequence
+
+// State logic for post-signal coloring
+var bool in_green_mode = false // Assumes the background color is red by default
+
+if buy_condition and not in_position
+    in_green_mode := true
+else if sell_condition
+    in_green_mode := false
+
+if show_signals
+    // BUY Signal Execution
+    if buy_condition and not in_position
+        lb = label.new(bar_index, low, "BUY", xloc=xloc.bar_index, yloc=yloc.belowbar, color=color.new(color.purple,0), style=label.style_label_up, textcolor=color.white, size=size.small)
+        array.push(buys_labels, lb)
+        if array.size(buys_labels) > label_max
+            label.delete(array.shift(buys_labels))
+        in_position := true
+    
+    // SELL Signal Execution
+    if sell_condition
+        ls = label.new(bar_index, high, "SELL", xloc=xloc.bar_index, yloc=yloc.abovebar, color=color.new(color.red,0), style=label.style_label_down, textcolor=color.white, size=size.small)
+        array.push(sells_labels, ls)
+        if array.size(sells_labels) > label_max
+            label.delete(array.shift(sells_labels))
+        in_position := false
+
+// =============================================================================
+// A D J U S T E D   B A R   C O L O R I N G
+// =============================================================================
+var color color_bar_final = color.silver 
+
+// Coloring logic
+if sell_condition
+    color_bar_final := color_bar_bear // Paints the SELL candle red
+else if in_green_mode
+    if close < ema_htf
+        color_bar_final := color_bar_neut // If green mode is active and price is below the 200 EMA, paints it purple
+    else
+        color_bar_final := color_bar_bull // Otherwise, paints it green
+else
+    color_bar_final := color_bar_bear // After a SELL or at the beginning, paints it red
+    
+barcolor(color_bar_final)
+
+// =============================================================================
+// I N F O R M A T I O N   T A B L E S
+// =============================================================================
+
+// Warning Table
+var table warning_table = table.new(position.top_right, 1, 1, border_width=1, border_color=color.gray)
+
+if barstate.islast // Only on the last candle to prevent repetition
+    if not timeframe.ismonthly
+        table.cell(warning_table, 0, 0, "WARNING: This indicator is designed for the MONTHLY timeframe only.", text_color=color.white, bgcolor=color.red, text_size=size.small)
+    else
+        table.cell(warning_table, 0, 0, "MONTHLY TIMEFRAME - Indicator is active.", text_color=color.white, bgcolor=color.green, text_size=size.small)
+
+// Info Table (below the Warning)
+var table info_table = table.new(position.top_right, 1, 4, border_width=1, border_color=color.gray)
+
+if show_info_table and barstate.islast
+    market_condition_text = wma_val > ema_htf ? "BULLISH" : "BEARISH"
+    market_condition_color = wma_val > ema_htf ? color.green : color.red
+
+    table.cell(info_table, 0, 0, "Condition: " + market_condition_text, text_color=color.white, bgcolor=market_condition_color)
+    table.cell(info_table, 0, 1, "Price: " + str.tostring(close, format.mintick), text_color=color.white, bgcolor=color.new(color.black, 80))
+    table.cell(info_table, 0, 2, "WMA" + str.tostring(wma_len) + ": " + str.tostring(wma_val, format.mintick), text_color=color.white, bgcolor=color.new(color_wma, 20))
+    table.cell(info_table, 0, 3, "EMA" + str.tostring(ema_week_len) + htf + ": " + str.tostring(ema_htf, format.mintick), text_color=color.white, bgcolor=color.new(color_ema, 20))
